@@ -30,7 +30,7 @@ class AbsoluteDualityGap():
         tol (int): Sets number of significant digits. Default is 8.
         verbose (bool): Sets displays.  Default is False.
         force_feasible_method (bool): If set to True, then will enforce the hyperplane projection method regardless of feasible points. Default is False.
-        normalize_c: Set to either 1 or np.inf. Decides the normalization constraint on c
+        normalize_c: Set to 1, np.inf, or 'custom'. Decides the normalization constraint on c
         ban_constraints (list): A list of constraint indices to force to zero when solving. Default is none.
 
     Example:
@@ -127,15 +127,18 @@ class AbsoluteDualityGap():
         points = [np.mat(point).T for point in points]
         assert self._fop, 'No forward model given.'
         feasible = checkFeasibility(points, self.A, self.b, self.tol)
-        if feasible or self.force_feasible_method:
-            self.error = self._solveHyperplaneProjection(points)
+        if self.normalize_c == 'custom':
+            self.error = self._solveCustomNormalize(points)
         else:
-            if self.normalize_c == 1:
-                self.error = self._solveBruteForceNorm1(points)
-            elif self.normalize_c == np.inf:
-                self.error = self._solveBruteForceNormInf(points)
+            if feasible or self.force_feasible_method:
+                self.error = self._solveHyperplaneProjection(points)
             else:
-                return -1
+                if self.normalize_c == 1:
+                    self.error = self._solveBruteForceNorm1(points)
+                elif self.normalize_c == np.inf:
+                    self.error = self._solveBruteForceNormInf(points)
+                else:
+                    return -1
         return self.error
 
     def _solveHyperplaneProjection(self, points):
@@ -158,6 +161,26 @@ class AbsoluteDualityGap():
                                                self.normalize_c)
         self._solved = True
         return errors[minInd]
+
+    def _solveCustomNormalize(self, points):
+        m, n = self.A.shape
+        nPoints = len(points)
+        y = cvx.Variable(m)
+        z = cvx.Variable(nPoints)
+        c = cvx.Variable(n)
+
+        obj, cons = self._baseBruteForceProblem(y, z, c, points)
+
+        customNormalize = c >= 1  # you can change this as you see fit
+        cons.append(customNormalize)
+
+        prob = cvx.Problem(obj, cons)
+        self.error = prob.solve(solver=self.solver)
+        self.c = c.value.T.tolist()[0]
+        self.dual = y.value.T.tolist()[0]
+        self._solved = True
+        self.normalize_c = 1
+        return self.error
 
     def _baseBruteForceProblem(self, y, z, c, points):
         obj = cvx.Minimize(sum(z))
@@ -305,7 +328,9 @@ class AbsoluteDualityGap():
             self.ban_constraints = kwargs['ban_constraints']
 
         if 'normalize_c' in kwargs:
-            assert kwargs['normalize_c'] == 1 or kwargs['normalize_c'] == np.inf, 'normalize c with 1 or infinity norm.'
+            assert kwargs['normalize_c'] in [
+                1, np.inf, 'custom'
+            ], 'normalize c with 1 or infinity norm.'
             self.normalize_c = kwargs['normalize_c']
 
         if 'solver' in kwargs:

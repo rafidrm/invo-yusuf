@@ -30,7 +30,7 @@ class RelativeDualityGap():
     Args:
         tol (int): Sets number of significant digits. Default is 8.
         verbose (bool): Sets displays.  Default False.
-        normalize_c: Set to either 1 or np.inf. Decides the normalization constraint on c
+        normalize_c: Set to 1, np.inf, or 'custom'. Decides the normalization constraint on c
         ban_constraints (list): A list of constraint indices to force to zero when solving. Default is none.
 
     Example:
@@ -142,14 +142,17 @@ class RelativeDualityGap():
 
         points = [np.mat(point).T for point in points]
         assert self._fop, 'No forward model given.'
-        self.error = self._solveRelativeDGLP(points)
-        if (np.round(self.c, self.tol) == 0).all():
-            # the relative problem returned c = 0 and we have to fix.
-            # First we solve the auxiliary problem
-            self.K = self._solve_auxiliary_problem()
+        if self.normalize_c == 'custom':
+            self.error = self._solveCustomNormalize(points)
+        else:
+            self.error = self._solveRelativeDGLP(points)
+            if (np.round(self.c, self.tol) == 0).all():
+                # the relative problem returned c = 0 and we have to fix.
+                # First we solve the auxiliary problem
+                self.K = self._solve_auxiliary_problem()
 
-            #Then we solve the "hard way"
-            self.error = self._solveRelativeDG(points)
+                #Then we solve the "hard way"
+                self.error = self._solveRelativeDG(points)
         return self.error
 
     def _solve_auxiliary_problem(self):
@@ -291,6 +294,54 @@ class RelativeDualityGap():
             if result > bestResult:
                 bestResult = result
         return result
+
+    def _solveCustomNormalize(self, points):
+        m, n = self.A.shape
+        nPoints = len(points)
+
+        # first solve the positive variant
+        obj1, cons1, y1, z1, c1 = self._positiveProblem(m, n, nPoints, points)
+
+        customNormalize = c1 >= 1  # you can change this as you see fit
+        cons1.append(customNormalize)
+
+        prob1 = cvx.Problem(obj1, cons1)
+        result1 = prob1.solve(solver=self.solver)
+
+        # then solve the negative variant
+        obj2, cons2, y2, z2, c2 = self._negativeProblem(m, n, nPoints, points)
+
+        customNormalize = c2 >= 1  # you can change this as you see fit
+        cons2.append(customNormalize)
+
+        prob2 = cvx.Problem(obj2, cons2)
+        result2 = prob2.solve(solver=self.solver)
+
+        # then solve the zero variant
+        obj3, cons3, y3, c3 = self._zeroProblem(m, n, nPoints, points)
+
+        customNormalize = c3 >= 1  # you can change this as you see fit
+        cons3.append(customNormalize)
+
+        prob3 = cvx.Problem(obj3, cons3)
+        result3 = prob3.solve(solver=self.solver)
+
+        optimalReform = np.argmin([result1, result2, result3])
+        if optimalReform == 0:
+            self.c = c1.value
+            self.dual = y1.value
+        elif optimalReform == 1:
+            self.c = c2.value
+            self.dual = y2.value
+        elif optimalReform == 2:
+            self.c = c3.value
+            self.dual = y3.value
+
+        self.c = self.c.T.tolist()[0]
+        self.dual = self.dual.T.tolist()[0]
+        self._solved = True
+        self.normalize_c = 1
+        return np.min([result1, result2, result3])
 
     def _baseBruteForceProblem(self, y, z, c):
         obj = cvx.Minimize(sum(z))
@@ -583,7 +634,9 @@ class RelativeDualityGap():
             self.ban_constraints = kwargs['ban_constraints']
 
         if 'normalize_c' in kwargs:
-            assert kwargs['normalize_c'] == 1 or kwargs['normalize_c'] == np.inf, 'normalize c with 1 or infinity norm.'
+            assert kwargs['normalize_c'] in [
+                1, np.inf, 'custom'
+            ], 'normalize c with 1 or infinity norm.'
             self.normalize_c = kwargs['normalize_c']
 
         if 'solver' in kwargs:
