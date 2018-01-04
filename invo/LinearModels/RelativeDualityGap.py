@@ -50,6 +50,7 @@ class RelativeDualityGap():
         self._fop = False
         self._solved = False
         self._verbose = False
+        self.force_priority = False
         self.tol = 8
         self.solver = cvx.ECOS_BB
         self.ban_constraints = []
@@ -344,7 +345,21 @@ class RelativeDualityGap():
         return np.min([result1, result2, result3])
 
     def _baseBruteForceProblem(self, y, z, c):
-        obj = cvx.Minimize(sum(z))
+        if self.force_priority:
+            z1 = [
+                zi for zi, priority in zip(z, self.priorities) if priority == 1
+            ]
+            z2 = [
+                zi for zi, priority in zip(z, self.priorities) if priority == 2
+            ]
+            z3 = [
+                zi for zi, priority in zip(z, self.priorities) if priority == 3
+            ]
+            wts = self.priority_weights
+            obj = cvx.Minimize(wts[0] * sum(z1) + wts[1] * sum(z2) +
+                               wts[2] * sum(z3))
+        else:
+            obj = cvx.Minimize(sum(z))
         cons = []
         cons.append(y >= 0)
         cons.append(self.A.T * y == c)
@@ -627,6 +642,14 @@ class RelativeDualityGap():
             assert isinstance(kwargs['tol'],
                               int), 'tolernace needs to be an integer.'
             self.tol = kwargs['tol']
+
+        if 'force_priority' in kwargs:
+            assert isinstance(
+                kwargs['force_priority'],
+                bool), 'force_priority needs to be True or False.'
+            self.priorities = kwargs['priorities'] or []
+            self.priority_weights = kwargs['priority_weights'] or [1, 1, 1]
+            self.force_priority = kwargs['force_priority']
 
         if 'ban_constraints' in kwargs:
             assert isinstance(kwargs['ban_constraints'],

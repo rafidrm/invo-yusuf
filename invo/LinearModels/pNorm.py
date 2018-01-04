@@ -54,6 +54,8 @@ class pNorm():
         self._fop = False
         self._verbose = False
         self._solved = False
+        self.normalize_c = 1
+        self.solver = cvx.ECOS_BB
         self.p = 2
         self.tol = 8
         self.ban_constraints = []
@@ -104,8 +106,15 @@ class pNorm():
 
         points = [np.mat(point).T for point in points]
         assert self._fop, 'No forward model given.'
-        self.error = self._solveFeasibleProjection(points)
+        if self.normalize_c != 'custom':
+            self.error = self._solveFeasibleProjection(points)
+        else:
+            self.error = self._solveCustomNormalize(points)
         return self.error
+
+    def _solveCustomNormalize(self, points):
+        m, n = self.A.shape
+        bestResult = np.inf
 
     def _solveFeasibleProjection(self, points):
         m, n = self.A.shape
@@ -122,8 +131,8 @@ class pNorm():
             if result < bestResult:
                 bestResult = result
                 self.dual = np.zeros(m)
-                self.dual[i] = 1.0 / np.linalg.norm(ai, np.inf)
-                self.c = ai / np.linalg.norm(ai, np.inf)
+                self.dual[i] = 1.0 / np.linalg.norm(ai, self.normalize_c)
+                self.c = ai / np.linalg.norm(ai, self.normalize_c)
         self._solved = True
         #self.dual = self.dual.T.tolist()[0]
         self.c = self.c.tolist()[0]
@@ -144,7 +153,7 @@ class pNorm():
             cons.append(ai * (points[x] - epsilons[x]) == bi)
         obj = cvx.Minimize(sum(objFunc))
         prob = cvx.Problem(obj, cons)
-        result = prob.solve()
+        result = prob.solve(solver=self.solver)
         return result
 
     def optimal_points(self, points):
@@ -174,7 +183,7 @@ class pNorm():
                 cons.append(ai * (points[x] - epsilons[x]) == bi)
             obj = cvx.Minimize(sum(objFunc))
             prob = cvx.Problem(obj, cons)
-            result = prob.solve()
+            result = prob.solve(solver=self.solver)
             xStars = [(np.mat(point).T - epsilon.value)
                       for point, epsilon in zip(points, epsilons)]
             xStars = [xs.T.tolist()[0] for xs in xStars]
@@ -215,6 +224,12 @@ class pNorm():
             assert isinstance(kwargs['tol'],
                               int), 'tolerance needs to be an integer.'
             self.tol = kwargs['tol']
+
+        if 'normalize_c' in kwargs:
+            assert kwargs['normalize_c'] in [
+                1, np.inf, 'custom'
+            ], 'normalize c with 1 or infinity norm.'
+            self.normalize_c = kwargs['normalize_c']
 
         # class specific kwargs
         if 'p' in kwargs:
